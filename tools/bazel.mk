@@ -38,7 +38,7 @@ GCLOUD_CONFIG := $(shell readlink -m ~/.config/gcloud/)
 DOCKER_SOCKET := /var/run/docker.sock
 DOCKER_CONFIG := /etc/docker
 
-# Bazel flags.
+# Bazel flags
 BAZEL := bazel $(STARTUP_OPTIONS)
 BASE_OPTIONS := --color=no --curses=no
 ifneq (,$(BAZEL_CONFIG))
