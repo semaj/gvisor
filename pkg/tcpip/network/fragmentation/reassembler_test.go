@@ -42,7 +42,7 @@ var holesTestCases = []struct {
 		comment: "One fragment at beginning. Expected holes: {[2, inf]}.",
 		in:      []updateHolesInput{{first: 0, last: 1, more: true}},
 		want: []hole{
-			{first: 0, last: math.MaxUint16, deleted: true},
+			{first: 0, last: 1, deleted: true},
 			{first: 2, last: math.MaxUint16, deleted: false},
 		},
 	},
@@ -50,7 +50,7 @@ var holesTestCases = []struct {
 		comment: "One fragment in the middle. Expected holes: {[0, 0], [3, inf]}.",
 		in:      []updateHolesInput{{first: 1, last: 2, more: true}},
 		want: []hole{
-			{first: 0, last: math.MaxUint16, deleted: true},
+			{first: 1, last: 2, deleted: true},
 			{first: 0, last: 0, deleted: false},
 			{first: 3, last: math.MaxUint16, deleted: false},
 		},
@@ -59,7 +59,7 @@ var holesTestCases = []struct {
 		comment: "One fragment at the end. Expected holes: {[0, 0]}.",
 		in:      []updateHolesInput{{first: 1, last: 2, more: false}},
 		want: []hole{
-			{first: 0, last: math.MaxUint16, deleted: true},
+			{first: 1, last: math.MaxUint16, deleted: true},
 			{first: 0, last: 0, deleted: false},
 		},
 	},
@@ -77,7 +77,7 @@ var holesTestCases = []struct {
 			{first: 2, last: 3, more: false},
 		},
 		want: []hole{
-			{first: 0, last: math.MaxUint16, deleted: true},
+			{first: 0, last: 1, deleted: true},
 			{first: 2, last: math.MaxUint16, deleted: true},
 		},
 	},
@@ -88,7 +88,7 @@ var holesTestCases = []struct {
 			{first: 2, last: 3, more: false},
 		},
 		want: []hole{
-			{first: 0, last: math.MaxUint16, deleted: true},
+			{first: 0, last: 2, deleted: true},
 			{first: 3, last: math.MaxUint16, deleted: true},
 		},
 	},

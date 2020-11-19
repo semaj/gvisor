@@ -75,7 +75,7 @@ var processTestCases = []struct {
 		},
 		out: []processOutput{
 			{vv: buffer.VectorisedView{}, done: false},
-			{vv: vv(4, "01", "23"), done: true},
+			{vv: vv(4, "0123"), done: true},
 		},
 	},
 	{
@@ -86,7 +86,7 @@ var processTestCases = []struct {
 		},
 		out: []processOutput{
 			{vv: buffer.VectorisedView{}, done: false},
-			{vv: vv(4, "01", "23"), proto: 6, done: true},
+			{vv: vv(4, "0123"), proto: 6, done: true},
 		},
 	},
 	{
@@ -100,8 +100,8 @@ var processTestCases = []struct {
 		out: []processOutput{
 			{vv: buffer.VectorisedView{}, done: false},
 			{vv: buffer.VectorisedView{}, done: false},
-			{vv: vv(4, "ab", "cd"), done: true},
-			{vv: vv(4, "01", "23"), done: true},
+			{vv: vv(4, "abcd"), done: true},
+			{vv: vv(4, "0123"), done: true},
 		},
 	},
 }
