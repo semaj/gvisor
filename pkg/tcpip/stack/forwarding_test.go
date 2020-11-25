@@ -51,6 +51,7 @@ type fwdTestNetworkEndpoint struct {
 	nic        NetworkInterface
 	proto      *fwdTestNetworkProtocol
 	dispatcher TransportDispatcher
+	stats      fwdTestNetworkEndpointStats
 }
 
 var _ NetworkEndpoint = (*fwdTestNetworkEndpoint)(nil)
@@ -139,6 +140,21 @@ func (f *fwdTestNetworkEndpoint) WriteHeaderIncludedPacket(r *Route, pkt *Packet
 
 func (f *fwdTestNetworkEndpoint) Close() {
 	f.AddressableEndpointState.Cleanup()
+}
+
+// Stats implements stack.NetworkEndpoint.
+func (f *fwdTestNetworkEndpoint) Stats() NetworkEndpointStats {
+	return &f.stats
+}
+
+var _ NetworkEndpointStats = (*fwdTestNetworkEndpointStats)(nil)
+
+type fwdTestNetworkEndpointStats struct {
+}
+
+// IPStats implements stack.NetworkEndpointStats.
+func (s *fwdTestNetworkEndpointStats) IPStats() *tcpip.IPStats {
+	return nil
 }
 
 // fwdTestNetworkProtocol is a network-layer protocol that implements Address

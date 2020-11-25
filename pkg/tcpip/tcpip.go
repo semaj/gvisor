@@ -1231,8 +1231,41 @@ func (s *StatCounter) String() string {
 	return strconv.FormatUint(s.Value(), 10)
 }
 
+// A MultiCounterStat keeps track of two counters at once.
+type MultiCounterStat struct {
+	a *StatCounter
+	b *StatCounter
+}
+
+// Increment adds one to the counters.
+func (m *MultiCounterStat) Increment() {
+	m.a.IncrementBy(1)
+	m.b.IncrementBy(1)
+}
+
+// Decrement minuses one to the counters.
+func (m *MultiCounterStat) Decrement() {
+	m.a.IncrementBy(^uint64(0))
+	m.b.IncrementBy(^uint64(0))
+}
+
+// LocalValue returns the current value of the counter. Only the local value is
+// returned, to find out what the global value is, the user should query
+// that stat directly.
+func (m *MultiCounterStat) LocalValue() uint64 {
+	return m.a.Value()
+}
+
+// IncrementBy increments the counters by v.
+func (m *MultiCounterStat) IncrementBy(v uint64) {
+	m.a.IncrementBy(v)
+	m.b.IncrementBy(v)
+}
+
 // ICMPv4PacketStats enumerates counts for all ICMPv4 packet types.
 type ICMPv4PacketStats struct {
+	// LINT.IfChange(ICMPv4PacketStats)
+
 	// Echo is the total number of ICMPv4 echo packets counted.
 	Echo *StatCounter
 
@@ -1272,10 +1305,60 @@ type ICMPv4PacketStats struct {
 	// InfoReply is the total number of ICMPv4 information reply packets
 	// counted.
 	InfoReply *StatCounter
+
+	// LINT.ThenChange(network/ipv4/icmp.go:MultiCounterICMPv4PacketStats)
+}
+
+// ICMPv4SentPacketStats collects outbound ICMPv4-specific stats.
+type ICMPv4SentPacketStats struct {
+	// LINT.IfChange(ICMPv4SentPacketStats)
+
+	ICMPv4PacketStats
+
+	// Dropped is the total number of ICMPv4 packets dropped due to link
+	// layer errors.
+	Dropped *StatCounter
+
+	// RateLimited is the total number of ICMPv4 packets dropped due to
+	// rate limit being exceeded.
+	RateLimited *StatCounter
+
+	// LINT.ThenChange(network/ipv4/icmp.go:MultiCounterICMPv4SentPacketStats)
+}
+
+// ICMPv4ReceivedPacketStats collects inbound ICMPv4-specific stats.
+type ICMPv4ReceivedPacketStats struct {
+	// LINT.IfChange(ICMPv4ReceivedPacketStats)
+
+	ICMPv4PacketStats
+
+	// Invalid is the total number of ICMPv4 packets received that the
+	// transport layer could not parse.
+	Invalid *StatCounter
+
+	// LINT.ThenChange(network/ipv4/icmp.go:MultiCounterICMPv4ReceivedPacketStats)
+}
+
+// ICMPv4Stats collects ICMPv4-specific stats.
+type ICMPv4Stats struct {
+	// LINT.IfChange(ICMPv4Stats)
+
+	// ICMPv4SentPacketStats contains counts of sent packets by ICMPv4 packet type
+	// and a single count of packets which failed to write to the link
+	// layer.
+	PacketsSent ICMPv4SentPacketStats
+
+	// ICMPv4ReceivedPacketStats contains counts of received packets by ICMPv4
+	// packet type and a single count of invalid packets received.
+	PacketsReceived ICMPv4ReceivedPacketStats
+
+	// LINT.ThenChange(network/ipv4/icmp.go:MultiCounterICMPv4Stats)
 }
 
 // ICMPv6PacketStats enumerates counts for all ICMPv6 packet types.
 type ICMPv6PacketStats struct {
+	// LINT.IfChange(ICMPv6PacketStats)
+
 	// EchoRequest is the total number of ICMPv6 echo request packets
 	// counted.
 	EchoRequest *StatCounter
@@ -1330,32 +1413,14 @@ type ICMPv6PacketStats struct {
 	// MulticastListenerDone is the total number of Multicast Listener Done
 	// messages counted.
 	MulticastListenerDone *StatCounter
-}
 
-// ICMPv4SentPacketStats collects outbound ICMPv4-specific stats.
-type ICMPv4SentPacketStats struct {
-	ICMPv4PacketStats
-
-	// Dropped is the total number of ICMPv4 packets dropped due to link
-	// layer errors.
-	Dropped *StatCounter
-
-	// RateLimited is the total number of ICMPv6 packets dropped due to
-	// rate limit being exceeded.
-	RateLimited *StatCounter
-}
-
-// ICMPv4ReceivedPacketStats collects inbound ICMPv4-specific stats.
-type ICMPv4ReceivedPacketStats struct {
-	ICMPv4PacketStats
-
-	// Invalid is the total number of ICMPv4 packets received that the
-	// transport layer could not parse.
-	Invalid *StatCounter
+	// LINT.ThenChange(network/ipv6/icmp.go:MultiCounterICMPv6PacketStats)
 }
 
 // ICMPv6SentPacketStats collects outbound ICMPv6-specific stats.
 type ICMPv6SentPacketStats struct {
+	// LINT.IfChange(ICMPv6SentPacketStats)
+
 	ICMPv6PacketStats
 
 	// Dropped is the total number of ICMPv6 packets dropped due to link
@@ -1365,10 +1430,14 @@ type ICMPv6SentPacketStats struct {
 	// RateLimited is the total number of ICMPv6 packets dropped due to
 	// rate limit being exceeded.
 	RateLimited *StatCounter
+
+	// LINT.ThenChange(network/ipv6/icmp.go:MultiCounterICMPv6SentPacketStats)
 }
 
 // ICMPv6ReceivedPacketStats collects inbound ICMPv6-specific stats.
 type ICMPv6ReceivedPacketStats struct {
+	// LINT.IfChange(ICMPv6ReceivedPacketStats)
+
 	ICMPv6PacketStats
 
 	// Unrecognized is the total number of ICMPv6 packets received that the
@@ -1382,30 +1451,23 @@ type ICMPv6ReceivedPacketStats struct {
 	// RouterOnlyPacketsDroppedByHost is the total number of ICMPv6 packets
 	// dropped due to being router-specific packets.
 	RouterOnlyPacketsDroppedByHost *StatCounter
-}
 
-// ICMPv4Stats collects ICMPv4-specific stats.
-type ICMPv4Stats struct {
-	// ICMPv4SentPacketStats contains counts of sent packets by ICMPv4 packet type
-	// and a single count of packets which failed to write to the link
-	// layer.
-	PacketsSent ICMPv4SentPacketStats
-
-	// ICMPv4ReceivedPacketStats contains counts of received packets by ICMPv4
-	// packet type and a single count of invalid packets received.
-	PacketsReceived ICMPv4ReceivedPacketStats
+	// LINT.ThenChange(network/ipv6/icmp.go:MultiCounterICMPv6ReceivedPacketStats)
 }
 
 // ICMPv6Stats collects ICMPv6-specific stats.
 type ICMPv6Stats struct {
-	// ICMPv6SentPacketStats contains counts of sent packets by ICMPv6 packet type
-	// and a single count of packets which failed to write to the link
-	// layer.
+	// LINT.IfChange(ICMPv6Stats)
+
+	// PacketsSent contains counts of sent packets by ICMPv6 packet type and a
+	// single count of packets which failed to write to the link layer.
 	PacketsSent ICMPv6SentPacketStats
 
-	// ICMPv6ReceivedPacketStats contains counts of received packets by ICMPv6
-	// packet type and a single count of invalid packets received.
+	// PacketsReceived contains counts of received packets by ICMPv6 packet type
+	// and a single count of invalid packets received.
 	PacketsReceived ICMPv6ReceivedPacketStats
+
+	// LINT.ThenChange(network/ipv6/icmp.go:MultiCounterICMPv6Stats)
 }
 
 // ICMPStats collects ICMP-specific stats (both v4 and v6).
@@ -1419,6 +1481,8 @@ type ICMPStats struct {
 
 // IGMPPacketStats enumerates counts for all IGMP packet types.
 type IGMPPacketStats struct {
+	// LINT.IfChange(IGMPPacketStats)
+
 	// MembershipQuery is the total number of Membership Query messages counted.
 	MembershipQuery *StatCounter
 
@@ -1432,18 +1496,26 @@ type IGMPPacketStats struct {
 
 	// LeaveGroup is the total number of Leave Group messages counted.
 	LeaveGroup *StatCounter
+
+	// LINT.ThenChange(network/ipv4/igmp.go:MultiCounterIGMPPacketStats)
 }
 
 // IGMPSentPacketStats collects outbound IGMP-specific stats.
 type IGMPSentPacketStats struct {
+	// LINT.IfChange(IGMPSentPacketStats)
+
 	IGMPPacketStats
 
 	// Dropped is the total number of IGMP packets dropped.
 	Dropped *StatCounter
+
+	// LINT.ThenChange(network/ipv4/igmp.go:MultiCounterIGMPSentPacketStats)
 }
 
 // IGMPReceivedPacketStats collects inbound IGMP-specific stats.
 type IGMPReceivedPacketStats struct {
+	// LINT.IfChange(IGMPReceivedPacketStats)
+
 	IGMPPacketStats
 
 	// Invalid is the total number of IGMP packets received that IGMP could not
@@ -1457,21 +1529,29 @@ type IGMPReceivedPacketStats struct {
 	// Unrecognized is the total number of unrecognized messages counted, these
 	// are silently ignored for forward-compatibilty.
 	Unrecognized *StatCounter
+
+	// LINT.ThenChange(network/ipv4/igmp.go:MultiCounterIGMPReceivedPacketStats)
 }
 
-// IGMPStats colelcts IGMP-specific stats.
+// IGMPStats collects IGMP-specific stats.
 type IGMPStats struct {
-	// IGMPSentPacketStats contains counts of sent packets by IGMP packet type
-	// and a single count of invalid packets received.
+	// LINT.IfChange(IGMPStats)
+
+	// PacketsSent contains counts of sent packets by IGMP packet type and a
+	// single count of invalid packets received.
 	PacketsSent IGMPSentPacketStats
 
-	// IGMPReceivedPacketStats contains counts of received packets by IGMP packet
-	// type and a single count of invalid packets received.
+	// PacketsReceived contains counts of received packets by IGMP packet type and
+	// a single count of invalid packets received.
 	PacketsReceived IGMPReceivedPacketStats
+
+	// LINT.ThenChange(network/ipv4/igmp.go:MultiCounterIGMPStats)
 }
 
 // IPStats collects IP-specific stats (both v4 and v6).
 type IPStats struct {
+	// LINT.IfChange(IPStats)
+
 	// PacketsReceived is the total number of IP packets received from the
 	// link layer.
 	PacketsReceived *StatCounter
@@ -1527,6 +1607,8 @@ type IPStats struct {
 
 	// OptionUnknownReceived is the number of unknown IP options seen.
 	OptionUnknownReceived *StatCounter
+
+	// LINT.ThenChange(network/ip/stats.go:MultiCounterIPStats)
 }
 
 // TCPStats collects TCP-specific stats.
@@ -1786,6 +1868,60 @@ func InitStatCounters(v reflect.Value) {
 			}
 		} else {
 			InitStatCounters(v)
+		}
+	}
+}
+
+func setMultiCounters(multi *MultiCounterStat, fieldA, fieldB reflect.Value) {
+	formatError := "Field type mismatch: got = %s, want = *StatCounter"
+	counterA, ok := fieldA.Addr().Interface().(**StatCounter)
+	if !ok {
+		panic(fmt.Sprintf(formatError, fieldA.Type().Name()))
+	}
+	counterB, ok := fieldB.Addr().Interface().(**StatCounter)
+	if !ok {
+		panic(fmt.Sprintf(formatError, fieldA.Type().Name()))
+	}
+	multi.a = *counterA
+	multi.b = *counterB
+}
+
+func checkFieldCounts(a, b reflect.Value) {
+	fieldCountA := a.NumField()
+	fieldCountB := b.NumField()
+	if fieldCountA != fieldCountB {
+		panic(fmt.Sprintf("Field count mismatch: type %s has %d, type %s has %d", a.Type().Name(), fieldCountA, b.Type().Name(), fieldCountB))
+	}
+}
+
+func checkFieldNames(a, b reflect.Value, i int) {
+	fieldNameA := a.Type().Field(i).Name
+	fieldNameB := b.Type().Field(i).Name
+	if fieldNameA != fieldNameB {
+		panic(fmt.Sprintf("Field #%d name mismatch: type %s has %s, type %s has %s", i, a.Type().Name(), fieldNameA, b.Type().Name(), fieldNameB))
+	}
+}
+
+// InitMultiCounterStats sets every the counters found in multi to the counters
+// found in a and b.
+// a and b must be of the same type, which is composed of *StatCounter fields
+// or other types embedding *StatCounter. multi must be the same as a and b
+// except that every *StatCounter field is expected to be a MultiCounterStat.
+// The field names of the counters are expected to match.  This function will
+// panic if any of the expectations is not met.
+func InitMultiCounterStats(multi, a, b reflect.Value) {
+	checkFieldCounts(multi, a)
+	checkFieldCounts(multi, b)
+	for i := 0; i < multi.NumField(); i++ {
+		fieldMulti := multi.Field(i)
+		fieldA := a.Field(i)
+		fieldB := b.Field(i)
+		if m, ok := fieldMulti.Addr().Interface().(*MultiCounterStat); ok {
+			checkFieldNames(multi, a, i)
+			checkFieldNames(multi, b, i)
+			setMultiCounters(m, fieldA, fieldB)
+		} else {
+			InitMultiCounterStats(fieldMulti, fieldA, fieldB)
 		}
 	}
 }

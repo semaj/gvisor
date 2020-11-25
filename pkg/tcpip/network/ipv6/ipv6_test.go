@@ -2583,10 +2583,11 @@ func TestClearEndpointFromProtocolOnClose(t *testing.T) {
 		NetworkProtocols: []stack.NetworkProtocolFactory{NewProtocol},
 	})
 	proto := s.NetworkProtocolInstance(ProtocolNumber).(*protocol)
-	ep := proto.NewEndpoint(&testInterface{}, nil, nil, nil).(*endpoint)
+	nic := testInterface{}
+	ep := proto.NewEndpoint(&nic, nil, nil, nil).(*endpoint)
 	{
 		proto.mu.Lock()
-		_, hasEP := proto.mu.eps[ep]
+		_, hasEP := proto.mu.eps[nic.ID()]
 		proto.mu.Unlock()
 		if !hasEP {
 			t.Fatalf("expected protocol to have ep = %p in set of endpoints", ep)
@@ -2597,7 +2598,7 @@ func TestClearEndpointFromProtocolOnClose(t *testing.T) {
 
 	{
 		proto.mu.Lock()
-		_, hasEP := proto.mu.eps[ep]
+		_, hasEP := proto.mu.eps[nic.ID()]
 		proto.mu.Unlock()
 		if hasEP {
 			t.Fatalf("unexpectedly found ep = %p in set of protocol's endpoints", ep)

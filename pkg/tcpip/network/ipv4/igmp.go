@@ -139,8 +139,7 @@ func (igmp *igmpState) init(ep *endpoint, opts IGMPOptions) {
 }
 
 func (igmp *igmpState) handleIGMP(pkt *stack.PacketBuffer) {
-	stats := igmp.ep.protocol.stack.Stats()
-	received := stats.IGMP.PacketsReceived
+	received := igmp.ep.stats.IGMP.PacketsReceived
 	headerView, ok := pkt.Data.PullUp(header.IGMPMinimumSize)
 	if !ok {
 		received.Invalid.Increment()
@@ -254,7 +253,9 @@ func (igmp *igmpState) writePacket(destAddress tcpip.Address, groupAddress tcpip
 		&header.IPv4SerializableRouterAlertOption{},
 	})
 
-	sent := igmp.ep.protocol.stack.Stats().IGMP.PacketsSent
+	// TODO(b/162198658): set the ROUTER_ALERT option when sending Host
+	// Membership Reports.
+	sent := igmp.ep.stats.IGMP.PacketsSent
 	if err := igmp.ep.nic.WritePacketToRemote(header.EthernetAddressFromMulticastIPv4Address(destAddress), nil /* gso */, ProtocolNumber, pkt); err != nil {
 		sent.Dropped.Increment()
 		return err
@@ -320,4 +321,77 @@ func (igmp *igmpState) initializeAll() {
 	igmp.mu.Lock()
 	defer igmp.mu.Unlock()
 	igmp.mu.genericMulticastProtocol.InitializeGroups()
+}
+
+// MultiCounterIGMPPacketStats enumerates counts for all IGMP packet types for
+// both an endpoint and the stack.
+type MultiCounterIGMPPacketStats struct {
+	// LINT.IfChange(MultiCounterIGMPPacketStats)
+
+	// MembershipQuery is the total number of Membership Query messages counted.
+	MembershipQuery tcpip.MultiCounterStat
+
+	// V1MembershipReport is the total number of Version 1 Membership Report
+	// messages counted.
+	V1MembershipReport tcpip.MultiCounterStat
+
+	// V2MembershipReport is the total number of Version 2 Membership Report
+	// messages counted.
+	V2MembershipReport tcpip.MultiCounterStat
+
+	// LeaveGroup is the total number of Leave Group messages counted.
+	LeaveGroup tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:IGMPPacketStats)
+}
+
+// MultiCounterIGMPSentPacketStats collects outbound IGMP-specific stats of an
+// endpoint and of the stack.
+type MultiCounterIGMPSentPacketStats struct {
+	// LINT.IfChange(MultiCounterIGMPSentPacketStats)
+
+	MultiCounterIGMPPacketStats
+
+	// Dropped is the total number of IGMP packets dropped due to link layer
+	// errors.
+	Dropped tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:IGMPSentPacketStats)
+}
+
+// MultiCounterIGMPReceivedPacketStats collects inbound IGMP-specific stats.
+type MultiCounterIGMPReceivedPacketStats struct {
+	// LINT.IfChange(MultiCounterIGMPReceivedPacketStats)
+
+	MultiCounterIGMPPacketStats
+
+	// Invalid is the total number of IGMP packets received that IGMP could not
+	// parse.
+	Invalid tcpip.MultiCounterStat
+
+	// ChecksumErrors is the total number of IGMP packets dropped due to bad
+	// checksums.
+	ChecksumErrors tcpip.MultiCounterStat
+
+	// Unrecognized is the total number of unrecognized messages counted, these
+	// are silently ignored for forward-compatibilty.
+	Unrecognized tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:IGMPReceivedPacketStats)
+}
+
+// MultiCounterIGMPStats collects IGMP-specific stats of an endpoint and tracks
+// the global IGMP-specific stats.
+type MultiCounterIGMPStats struct {
+	// LINT.IfChange(MultiCounterIGMPStats)
+
+	// PacketsSent contains counts of sent packets by IGMP packet type and a
+	// single count of invalid packets received.
+	PacketsSent MultiCounterIGMPSentPacketStats
+
+	// PacketsReceived contains counts of received packets by IGMP packet type and
+	// a single count of invalid packets received.
+	PacketsReceived MultiCounterIGMPReceivedPacketStats
+
+	// LINT.ThenChange(../../tcpip.go:IGMPStats)
 }

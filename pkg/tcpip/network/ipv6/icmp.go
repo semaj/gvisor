@@ -125,9 +125,8 @@ func getTargetLinkAddr(it header.NDPOptionIterator) (tcpip.LinkAddress, bool) {
 }
 
 func (e *endpoint) handleICMP(pkt *stack.PacketBuffer, hasFragmentHeader bool) {
-	stats := e.protocol.stack.Stats().ICMP
-	sent := stats.V6.PacketsSent
-	received := stats.V6.PacketsReceived
+	sent := e.stats.ICMP.PacketsSent
+	received := e.stats.ICMP.PacketsReceived
 	// TODO(gvisor.dev/issue/170): ICMP packets don't have their
 	// TransportHeader fields set. See icmp/protocol.go:protocol.Parse for a
 	// full explanation.
@@ -855,8 +854,15 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	}
 	defer route.Release()
 
-	stats := p.stack.Stats().ICMP
-	sent := stats.V6.PacketsSent
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	netEP, ok := p.mu.eps[pkt.NICID]
+	if !ok {
+		return tcpip.ErrNotConnected
+	}
+
+	sent := netEP.stats.ICMP.PacketsSent
+
 	if !p.stack.AllowICMPMessage() {
 		sent.RateLimited.Increment()
 		return nil
@@ -913,7 +919,7 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	newPkt.TransportProtocolNumber = header.ICMPv6ProtocolNumber
 
 	icmpHdr := header.ICMPv6(newPkt.TransportHeader().Push(header.ICMPv6DstUnreachableMinimumSize))
-	var counter *tcpip.StatCounter
+	var counter tcpip.MultiCounterStat
 	switch reason := reason.(type) {
 	case *icmpReasonParameterProblem:
 		icmpHdr.SetType(header.ICMPv6ParamProblem)
@@ -963,4 +969,119 @@ func (p *protocol) OnReassemblyTimeout(pkt *stack.PacketBuffer) {
 	if pkt != nil {
 		p.returnError(&icmpReasonReassemblyTimeout{}, pkt)
 	}
+}
+
+// MultiCounterICMPv6PacketStats enumerates counts for all ICMPv6 packet types.
+type MultiCounterICMPv6PacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv6PacketStats)
+
+	// EchoRequest is the total number of ICMPv6 echo request packets
+	// counted.
+	EchoRequest tcpip.MultiCounterStat
+
+	// EchoReply is the total number of ICMPv6 echo reply packets counted.
+	EchoReply tcpip.MultiCounterStat
+
+	// DstUnreachable is the total number of ICMPv6 destination unreachable
+	// packets counted.
+	DstUnreachable tcpip.MultiCounterStat
+
+	// PacketTooBig is the total number of ICMPv6 packet too big packets
+	// counted.
+	PacketTooBig tcpip.MultiCounterStat
+
+	// TimeExceeded is the total number of ICMPv6 time exceeded packets
+	// counted.
+	TimeExceeded tcpip.MultiCounterStat
+
+	// ParamProblem is the total number of ICMPv6 parameter problem packets
+	// counted.
+	ParamProblem tcpip.MultiCounterStat
+
+	// RouterSolicit is the total number of ICMPv6 router solicit packets
+	// counted.
+	RouterSolicit tcpip.MultiCounterStat
+
+	// RouterAdvert is the total number of ICMPv6 router advert packets
+	// counted.
+	RouterAdvert tcpip.MultiCounterStat
+
+	// NeighborSolicit is the total number of ICMPv6 neighbor solicit
+	// packets counted.
+	NeighborSolicit tcpip.MultiCounterStat
+
+	// NeighborAdvert is the total number of ICMPv6 neighbor advert packets
+	// counted.
+	NeighborAdvert tcpip.MultiCounterStat
+
+	// RedirectMsg is the total number of ICMPv6 redirect message packets
+	// counted.
+	RedirectMsg tcpip.MultiCounterStat
+
+	// MulticastListenerQuery is the total number of Multicast Listener Query
+	// messages counted.
+	MulticastListenerQuery tcpip.MultiCounterStat
+
+	// MulticastListenerReport is the total number of Multicast Listener Report
+	// messages counted.
+	MulticastListenerReport tcpip.MultiCounterStat
+
+	// MulticastListenerDone is the total number of Multicast Listener Done
+	// messages counted.
+	MulticastListenerDone tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv6PacketStats)
+}
+
+// MultiCounterICMPv6SentPacketStats collects outbound ICMPv6-specific stats.
+type MultiCounterICMPv6SentPacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv6SentPacketStats)
+
+	MultiCounterICMPv6PacketStats
+
+	// Dropped is the total number of ICMPv6 packets dropped due to link
+	// layer errors.
+	Dropped tcpip.MultiCounterStat
+
+	// RateLimited is the total number of ICMPv6 packets dropped due to
+	// rate limit being exceeded.
+	RateLimited tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv6SentPacketStats)
+}
+
+// MultiCounterICMPv6ReceivedPacketStats collects inbound ICMPv6-specific stats.
+type MultiCounterICMPv6ReceivedPacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv6ReceivedPacketStats)
+
+	MultiCounterICMPv6PacketStats
+
+	// Unrecognized is the total number of ICMPv6 packets received that the
+	// transport layer does not know how to parse.
+	Unrecognized tcpip.MultiCounterStat
+
+	// Invalid is the total number of ICMPv6 packets received that the
+	// transport layer could not parse.
+	Invalid tcpip.MultiCounterStat
+
+	// RouterOnlyPacketsDroppedByHost is the total number of ICMPv6 packets
+	// dropped due to being router-specific packets.
+	RouterOnlyPacketsDroppedByHost tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv6ReceivedPacketStats)
+}
+
+// MultiCounterICMPv6Stats collects ICMPv6-specific stats.
+type MultiCounterICMPv6Stats struct {
+	// LINT.IfChange(MultiCounterICMPv6Stats)
+
+	// PacketsSent contains counts of sent packets by ICMPv6 packet type and a
+	// single count of packets which failed to write to the link layer.
+	PacketsSent MultiCounterICMPv6SentPacketStats
+
+	// PacketsReceived contains counts of received packets by ICMPv6 packet type
+	// and a single count of invalid packets received.
+	PacketsReceived MultiCounterICMPv6ReceivedPacketStats
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv6Stats)
 }

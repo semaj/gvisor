@@ -62,8 +62,7 @@ func (e *endpoint) handleControl(typ stack.ControlType, extra uint32, pkt *stack
 }
 
 func (e *endpoint) handleICMP(pkt *stack.PacketBuffer) {
-	stats := e.protocol.stack.Stats()
-	received := stats.ICMP.V4.PacketsReceived
+	received := e.stats.ICMP.PacketsReceived
 	// TODO(gvisor.dev/issue/170): ICMP packets don't have their
 	// TransportHeader fields set. See icmp/protocol.go:protocol.Parse for a
 	// full explanation.
@@ -117,8 +116,8 @@ func (e *endpoint) handleICMP(pkt *stack.PacketBuffer) {
 				errors.Is(err, errIPv4TimestampOptInvalidPointer),
 				errors.Is(err, errIPv4TimestampOptOverflow):
 				_ = e.protocol.returnError(&icmpReasonParamProblem{pointer: aux}, pkt)
-				stats.MalformedRcvdPackets.Increment()
-				stats.IP.MalformedPacketsReceived.Increment()
+				e.protocol.stack.Stats().MalformedRcvdPackets.Increment()
+				e.stats.IP.MalformedPacketsReceived.Increment()
 			}
 			return
 		}
@@ -130,7 +129,7 @@ func (e *endpoint) handleICMP(pkt *stack.PacketBuffer) {
 	case header.ICMPv4Echo:
 		received.Echo.Increment()
 
-		sent := stats.ICMP.V4.PacketsSent
+		sent := e.stats.ICMP.PacketsSent
 		if !e.protocol.stack.AllowICMPMessage() {
 			sent.RateLimited.Increment()
 			return
@@ -379,7 +378,14 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	}
 	defer route.Release()
 
-	sent := p.stack.Stats().ICMP.V4.PacketsSent
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	netEP, ok := p.mu.eps[pkt.NICID]
+	if !ok {
+		return tcpip.ErrNotConnected
+	}
+	sent := netEP.stats.ICMP.PacketsSent
+
 	if !p.stack.AllowICMPMessage() {
 		sent.RateLimited.Increment()
 		return nil
@@ -471,7 +477,7 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	icmpPkt.TransportProtocolNumber = header.ICMPv4ProtocolNumber
 
 	icmpHdr := header.ICMPv4(icmpPkt.TransportHeader().Push(header.ICMPv4MinimumSize))
-	var counter *tcpip.StatCounter
+	var counter tcpip.MultiCounterStat
 	switch reason := reason.(type) {
 	case *icmpReasonPortUnreachable:
 		icmpHdr.SetType(header.ICMPv4DstUnreachable)
@@ -528,4 +534,98 @@ func (p *protocol) OnReassemblyTimeout(pkt *stack.PacketBuffer) {
 	if pkt != nil {
 		p.returnError(&icmpReasonReassemblyTimeout{}, pkt)
 	}
+}
+
+// MultiCounterICMPv4PacketStats enumerates counts for all ICMPv4 packet types.
+type MultiCounterICMPv4PacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv4PacketStats)
+
+	// Echo is the total number of ICMPv4 echo packets counted.
+	Echo tcpip.MultiCounterStat
+
+	// EchoReply is the total number of ICMPv4 echo reply packets counted.
+	EchoReply tcpip.MultiCounterStat
+
+	// DstUnreachable is the total number of ICMPv4 destination unreachable
+	// packets counted.
+	DstUnreachable tcpip.MultiCounterStat
+
+	// SrcQuench is the total number of ICMPv4 source quench packets
+	// counted.
+	SrcQuench tcpip.MultiCounterStat
+
+	// Redirect is the total number of ICMPv4 redirect packets counted.
+	Redirect tcpip.MultiCounterStat
+
+	// TimeExceeded is the total number of ICMPv4 time exceeded packets
+	// counted.
+	TimeExceeded tcpip.MultiCounterStat
+
+	// ParamProblem is the total number of ICMPv4 parameter problem packets
+	// counted.
+	ParamProblem tcpip.MultiCounterStat
+
+	// Timestamp is the total number of ICMPv4 timestamp packets counted.
+	Timestamp tcpip.MultiCounterStat
+
+	// TimestampReply is the total number of ICMPv4 timestamp reply packets
+	// counted.
+	TimestampReply tcpip.MultiCounterStat
+
+	// InfoRequest is the total number of ICMPv4 information request
+	// packets counted.
+	InfoRequest tcpip.MultiCounterStat
+
+	// InfoReply is the total number of ICMPv4 information reply packets
+	// counted.
+	InfoReply tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv4PacketStats)
+}
+
+// MultiCounterICMPv4SentPacketStats collects outbound ICMPv4-specific stats.
+type MultiCounterICMPv4SentPacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv4SentPacketStats)
+
+	MultiCounterICMPv4PacketStats
+
+	// Dropped is the total number of ICMPv4 packets dropped due to link
+	// layer errors.
+	Dropped tcpip.MultiCounterStat
+
+	// RateLimited is the total number of ICMPv4 packets dropped due to
+	// rate limit being exceeded.
+	RateLimited tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv4SentPacketStats)
+}
+
+// MultiCounterICMPv4ReceivedPacketStats collects inbound ICMPv4-specific
+// stats.
+type MultiCounterICMPv4ReceivedPacketStats struct {
+	// LINT.IfChange(MultiCounterICMPv4ReceivedPacketStats)
+
+	MultiCounterICMPv4PacketStats
+
+	// Invalid is the total number of ICMPv4 packets received that the
+	// transport layer could not parse.
+	Invalid tcpip.MultiCounterStat
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv4ReceivedPacketStats)
+}
+
+// MultiCounterICMPv4Stats collects ICMPv4-specific stats.
+type MultiCounterICMPv4Stats struct {
+	// LINT.IfChange(MultiCounterICMPv4Stats)
+
+	// ICMPv4SentPacketStats contains counts of sent packets by ICMPv4 packet type
+	// and a single count of packets which failed to write to the link
+	// layer.
+	PacketsSent MultiCounterICMPv4SentPacketStats
+
+	// ICMPv4ReceivedPacketStats contains counts of received packets by ICMPv4
+	// packet type and a single count of invalid packets received.
+	PacketsReceived MultiCounterICMPv4ReceivedPacketStats
+
+	// LINT.ThenChange(../../tcpip.go:ICMPv4Stats)
 }

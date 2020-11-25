@@ -79,6 +79,7 @@ type fakeNetworkEndpoint struct {
 	nic        stack.NetworkInterface
 	proto      *fakeNetworkProtocol
 	dispatcher stack.TransportDispatcher
+	stats      fakeNetworkEndpointStats
 }
 
 func (f *fakeNetworkEndpoint) Enable() *tcpip.Error {
@@ -186,6 +187,21 @@ func (*fakeNetworkEndpoint) WriteHeaderIncludedPacket(r *stack.Route, pkt *stack
 
 func (f *fakeNetworkEndpoint) Close() {
 	f.AddressableEndpointState.Cleanup()
+}
+
+// Stats implements stack.NetworkEndpoint.
+func (f *fakeNetworkEndpoint) Stats() stack.NetworkEndpointStats {
+	return &f.stats
+}
+
+var _ stack.NetworkEndpointStats = (*fakeNetworkEndpointStats)(nil)
+
+type fakeNetworkEndpointStats struct {
+}
+
+// IPStats implements stack.NetworkEndpointStats.
+func (s *fakeNetworkEndpointStats) IPStats() *tcpip.IPStats {
+	return nil
 }
 
 // fakeNetworkProtocol is a network-layer protocol descriptor. It aggregates the

@@ -35,6 +35,7 @@ type testIPv6Endpoint struct {
 
 	nic      NetworkInterface
 	protocol *testIPv6Protocol
+	stats    testIPv6EndpointStats
 
 	invalidatedRtr tcpip.Address
 }
@@ -97,6 +98,21 @@ func (*testIPv6Endpoint) NetworkProtocolNumber() tcpip.NetworkProtocolNumber {
 
 func (e *testIPv6Endpoint) InvalidateDefaultRouter(rtr tcpip.Address) {
 	e.invalidatedRtr = rtr
+}
+
+// Stats implements stack.NetworkEndpoint.
+func (e *testIPv6Endpoint) Stats() NetworkEndpointStats {
+	return &e.stats
+}
+
+var _ NetworkEndpointStats = (*testIPv6EndpointStats)(nil)
+
+type testIPv6EndpointStats struct {
+}
+
+// IPStats implements stack.NetworkEndpointStats.
+func (e *testIPv6EndpointStats) IPStats() *tcpip.IPStats {
+	return nil
 }
 
 var _ NetworkProtocol = (*testIPv6Protocol)(nil)

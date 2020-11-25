@@ -724,7 +724,7 @@ func (ndp *ndpState) sendDADPacket(addr tcpip.Address, addressEndpoint stack.Add
 		Data:               buffer.View(icmp).ToVectorisedView(),
 	})
 
-	sent := ndp.ep.protocol.stack.Stats().ICMP.V6.PacketsSent
+	sent := ndp.ep.stats.ICMP.PacketsSent
 	ndp.ep.addIPHeader(header.IPv6Any, snmc, pkt, stack.NetworkHeaderParams{
 		Protocol: header.ICMPv6ProtocolNumber,
 		TTL:      header.NDPHopLimit,
@@ -735,6 +735,7 @@ func (ndp *ndpState) sendDADPacket(addr tcpip.Address, addressEndpoint stack.Add
 		return err
 	}
 	sent.NeighborSolicit.Increment()
+
 	return nil
 }
 
@@ -1846,7 +1847,7 @@ func (ndp *ndpState) startSolicitingRouters() {
 			Data:               buffer.View(icmpData).ToVectorisedView(),
 		})
 
-		sent := ndp.ep.protocol.stack.Stats().ICMP.V6.PacketsSent
+		sent := ndp.ep.stats.ICMP.PacketsSent
 		ndp.ep.addIPHeader(localAddr, header.IPv6AllRoutersMulticastAddress, pkt, stack.NetworkHeaderParams{
 			Protocol: header.ICMPv6ProtocolNumber,
 			TTL:      header.NDPHopLimit,
