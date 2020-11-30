@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"gvisor.dev/gvisor/pkg/sleep"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
@@ -148,6 +149,10 @@ type endpoint struct {
 
 	// ops is used to get socket level options.
 	ops tcpip.SocketOptions
+
+	// resCh is used to allow callers to wait on address resolution. It is nil
+	// iff address resolution is not being performed.
+	resCh chan struct{} `state:"nosave"`
 }
 
 // +stateify savable
@@ -265,6 +270,11 @@ func (e *endpoint) Close() {
 	if e.route != nil {
 		e.route.Release()
 		e.route = nil
+	}
+
+	if e.resCh != nil {
+		close(e.resCh)
+		e.resCh = nil
 	}
 
 	// Update the state.
@@ -495,27 +505,47 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	}
 
 	if route.IsResolutionRequired() {
-		if ch, err := route.Resolve(nil); err != nil {
+		waker := &sleep.Waker{}
+		if err := route.Resolve(nil, waker); err != nil {
 			if err == tcpip.ErrWouldBlock {
-				return 0, ch, tcpip.ErrNoLinkAddress
+				e.resCh = make(chan struct{})
+				go func() {
+					s := sleep.Sleeper{}
+					defer s.Done()
+
+					s.AddWaker(waker, 0)
+					_, _ = s.Fetch(true /* block */)
+
+					e.mu.Lock()
+					defer e.mu.Unlock()
+
+					close(e.resCh)
+					e.resCh = nil
+				}()
+				return 0, e.resCh, tcpip.ErrNoLinkAddress
 			}
 			return 0, nil, err
 		}
 	}
 
+	bytesWritten, err := e.send(route, dstPort, p, &lockReleased)
+	return bytesWritten, nil, err
+}
+
+func (e *endpoint) send(r *stack.Route, dstPort uint16, p tcpip.Payloader, lockReleased *bool) (int64, *tcpip.Error) {
 	v, err := p.FullPayload()
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	if len(v) > header.UDPMaximumPacketSize {
 		// Payload can't possibly fit in a packet.
-		return 0, nil, tcpip.ErrMessageTooLong
+		return 0, tcpip.ErrMessageTooLong
 	}
 
 	ttl := e.ttl
 	useDefaultTTL := ttl == 0
 
-	if header.IsV4MulticastAddress(route.RemoteAddress) || header.IsV6MulticastAddress(route.RemoteAddress) {
+	if header.IsV4MulticastAddress(r.RemoteAddress) || header.IsV6MulticastAddress(r.RemoteAddress) {
 		ttl = e.multicastTTL
 		// Multicast allows a 0 TTL.
 		useDefaultTTL = false
@@ -525,7 +555,7 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	sendTOS := e.sendTOS
 	owner := e.owner
 	noChecksum := e.SocketOptions().GetNoChecksum()
-	lockReleased = true
+	*lockReleased = true
 	e.mu.RUnlock()
 
 	// Do not hold lock when sending as loopback is synchronous and if the UDP
@@ -538,10 +568,10 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	//
 	// See: https://golang.org/pkg/sync/#RWMutex for details on why recursive read
 	// locking is prohibited.
-	if err := sendUDP(route, buffer.View(v).ToVectorisedView(), localPort, dstPort, ttl, useDefaultTTL, sendTOS, owner, noChecksum); err != nil {
-		return 0, nil, err
+	if err := sendUDP(r, buffer.View(v).ToVectorisedView(), localPort, dstPort, ttl, useDefaultTTL, sendTOS, owner, noChecksum); err != nil {
+		return 0, err
 	}
-	return int64(len(v)), nil, nil
+	return int64(len(v)), nil
 }
 
 // Peek only returns data from a single datagram, so do nothing here.
@@ -1043,6 +1073,7 @@ func (e *endpoint) Connect(addr tcpip.FullAddress) *tcpip.Error {
 	e.ID = id
 	e.boundBindToDevice = btd
 	e.route = r.Clone()
+	e.resCh = nil
 	e.dstPort = addr.Port
 	e.RegisterNICID = nicID
 	e.effectiveNetProtos = netProtos

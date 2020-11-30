@@ -28,6 +28,7 @@ package raw
 import (
 	"fmt"
 
+	"gvisor.dev/gvisor/pkg/sleep"
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
@@ -93,6 +94,10 @@ type endpoint struct {
 
 	// ops is used to get socket level options.
 	ops tcpip.SocketOptions
+
+	// resCh is used to allow callers to wait on address resolution. It is nil
+	// iff address resolution is not being performed.
+	resCh chan struct{} `state:"nosave"`
 }
 
 // NewEndpoint returns a raw  endpoint for the given protocols.
@@ -179,6 +184,11 @@ func (e *endpoint) Close() {
 		e.route = nil
 	}
 
+	if e.resCh != nil {
+		close(e.resCh)
+		e.resCh = nil
+	}
+
 	e.closed = true
 
 	e.waiterQueue.Notify(waiter.EventHUp | waiter.EventErr | waiter.EventIn | waiter.EventOut)
@@ -256,15 +266,14 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	}
 
 	e.mu.RLock()
+	defer e.mu.RUnlock()
 
 	if e.closed {
-		e.mu.RUnlock()
 		return 0, nil, tcpip.ErrInvalidEndpointState
 	}
 
 	payloadBytes, err := p.FullPayload()
 	if err != nil {
-		e.mu.RUnlock()
 		return 0, nil, err
 	}
 
@@ -273,7 +282,6 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	if e.ops.GetHeaderIncluded() {
 		ip := header.IPv4(payloadBytes)
 		if !ip.IsValid(len(payloadBytes)) {
-			e.mu.RUnlock()
 			return 0, nil, tcpip.ErrInvalidOptionValue
 		}
 		dstAddr := ip.DestinationAddress()
@@ -295,31 +303,38 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 		// If the user doesn't specify a destination, they should have
 		// connected to another address.
 		if !e.connected {
-			e.mu.RUnlock()
 			return 0, nil, tcpip.ErrDestinationRequired
 		}
 
+		// TODO(peterjohnston): this comment came from below. is it still applicable?
+		// We may need to resolve the route (match a link layer address to the
+		// network address). If that requires blocking (e.g. to use ARP),
+		// return a channel on which the caller can wait.
 		if e.route.IsResolutionRequired() {
-			savedRoute := e.route
-			// Promote lock to exclusive if using a shared route,
-			// given that it may need to change in finishWrite.
-			e.mu.RUnlock()
-			e.mu.Lock()
+			waker := &sleep.Waker{}
+			if err := e.route.Resolve(nil, waker); err != nil {
+				if err == tcpip.ErrWouldBlock {
+					e.resCh = make(chan struct{})
+					go func() {
+						s := sleep.Sleeper{}
+						defer s.Done()
 
-			// Make sure that the route didn't change during the
-			// time we didn't hold the lock.
-			if !e.connected || savedRoute != e.route {
-				e.mu.Unlock()
-				return 0, nil, tcpip.ErrInvalidEndpointState
+						s.AddWaker(waker, 0)
+						_, _ = s.Fetch(true /* block */)
+
+						e.mu.Lock()
+						defer e.mu.Unlock()
+
+						close(e.resCh)
+						e.resCh = nil
+					}()
+					return 0, e.resCh, tcpip.ErrNoLinkAddress
+				}
+				return 0, nil, err
 			}
-
-			n, ch, err := e.finishWrite(payloadBytes, savedRoute)
-			e.mu.Unlock()
-			return n, ch, err
 		}
 
 		n, ch, err := e.finishWrite(payloadBytes, e.route)
-		e.mu.RUnlock()
 		return n, ch, err
 	}
 
@@ -327,7 +342,6 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	// goes through a different NIC than the endpoint was bound to.
 	nic := opts.To.NIC
 	if e.bound && nic != 0 && nic != e.BindNICID {
-		e.mu.RUnlock()
 		return 0, nil, tcpip.ErrNoRoute
 	}
 
@@ -335,31 +349,17 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, <-c
 	// FindRoute will choose an appropriate source address.
 	route, err := e.stack.FindRoute(nic, e.BindAddr, opts.To.Addr, e.NetProto, false)
 	if err != nil {
-		e.mu.RUnlock()
 		return 0, nil, err
 	}
 
 	n, ch, err := e.finishWrite(payloadBytes, route)
 	route.Release()
-	e.mu.RUnlock()
 	return n, ch, err
 }
 
 // finishWrite writes the payload to a route. It resolves the route if
 // necessary. It's really just a helper to make defer unnecessary in Write.
 func (e *endpoint) finishWrite(payloadBytes []byte, route *stack.Route) (int64, <-chan struct{}, *tcpip.Error) {
-	// We may need to resolve the route (match a link layer address to the
-	// network address). If that requires blocking (e.g. to use ARP),
-	// return a channel on which the caller can wait.
-	if route.IsResolutionRequired() {
-		if ch, err := route.Resolve(nil); err != nil {
-			if err == tcpip.ErrWouldBlock {
-				return 0, ch, tcpip.ErrNoLinkAddress
-			}
-			return 0, nil, err
-		}
-	}
-
 	if e.ops.GetHeaderIncluded() {
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 			Data: buffer.View(payloadBytes).ToVectorisedView(),
@@ -438,6 +438,7 @@ func (e *endpoint) Connect(addr tcpip.FullAddress) *tcpip.Error {
 
 	// Save the route we've connected via.
 	e.route = route.Clone()
+	e.resCh = nil
 	e.connected = true
 
 	return nil

@@ -264,23 +264,23 @@ func (r *Route) ResolveWith(addr tcpip.LinkAddress) {
 	r.mu.remoteLinkAddress = addr
 }
 
-// Resolve attempts to resolve the link address if necessary. Returns ErrWouldBlock in
-// case address resolution requires blocking, e.g. wait for ARP reply. Waker is
-// notified when address resolution is complete (success or not).
+// Resolve attempts to resolve the link address if necessary.
 //
-// If address resolution is required, ErrNoLinkAddress and a notification channel is
-// returned for the top level caller to block. Channel is closed once address resolution
-// is complete (success or not).
+// Returns tcpip.ErrWouldBlock if address resolution requires blocking (e.g.
+// wait for ARP reply). If doneCh is provided, the channel will receive a link
+// address if address resolution is successful, otherwise it will be closed. If
+// waker is provided, it will be notified when address resolution is complete,
+// regardless of success or failure.
 //
 // The NIC r uses must not be locked.
-func (r *Route) Resolve(waker *sleep.Waker) (<-chan struct{}, *tcpip.Error) {
+func (r *Route) Resolve(doneCh chan<- tcpip.LinkAddress, waker *sleep.Waker) *tcpip.Error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if !r.isResolutionRequiredRLocked() {
 		// Nothing to do if there is no cache (which does the resolution on cache miss) or
 		// link address is already known.
-		return nil, nil
+		return nil
 	}
 
 	nextAddr := r.NextHop
@@ -288,7 +288,7 @@ func (r *Route) Resolve(waker *sleep.Waker) (<-chan struct{}, *tcpip.Error) {
 		// Local link address is already known.
 		if r.RemoteAddress == r.LocalAddress {
 			r.mu.remoteLinkAddress = r.LocalLinkAddress
-			return nil, nil
+			return nil
 		}
 		nextAddr = r.RemoteAddress
 	}
@@ -301,20 +301,20 @@ func (r *Route) Resolve(waker *sleep.Waker) (<-chan struct{}, *tcpip.Error) {
 	}
 
 	if neigh := r.outgoingNIC.neigh; neigh != nil {
-		entry, ch, err := neigh.entry(nextAddr, linkAddressResolutionRequestLocalAddr, r.linkRes, waker)
+		entry, err := neigh.entry(nextAddr, linkAddressResolutionRequestLocalAddr, r.linkRes, doneCh, waker)
 		if err != nil {
-			return ch, err
+			return err
 		}
 		r.mu.remoteLinkAddress = entry.LinkAddr
-		return nil, nil
+		return nil
 	}
 
-	linkAddr, ch, err := r.linkCache.GetLinkAddress(r.outgoingNIC.ID(), nextAddr, linkAddressResolutionRequestLocalAddr, r.NetProto, waker)
+	linkAddr, err := r.linkCache.GetLinkAddress(r.outgoingNIC.ID(), nextAddr, linkAddressResolutionRequestLocalAddr, r.NetProto, doneCh, waker)
 	if err != nil {
-		return ch, err
+		return err
 	}
 	r.mu.remoteLinkAddress = linkAddr
-	return nil, nil
+	return nil
 }
 
 // RemoveWaker removes a waker that has been added in Resolve().
