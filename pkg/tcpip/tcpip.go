@@ -734,10 +734,6 @@ const (
 	// number of unread bytes in the input buffer should be returned.
 	ReceiveQueueSizeOption
 
-	// SendBufferSizeOption is used by SetSockOptInt/GetSockOptInt to
-	// specify the send buffer size option.
-	SendBufferSizeOption
-
 	// ReceiveBufferSizeOption is used by SetSockOptInt/GetSockOptInt to
 	// specify the receive buffer size option.
 	ReceiveBufferSizeOption
@@ -904,14 +900,6 @@ type GettableSocketOption interface {
 type SettableSocketOption interface {
 	isSettableSocketOption()
 }
-
-// BindToDeviceOption is used by SetSockOpt/GetSockOpt to specify that sockets
-// should bind only on a specific NIC.
-type BindToDeviceOption NICID
-
-func (*BindToDeviceOption) isGettableSocketOption() {}
-
-func (*BindToDeviceOption) isSettableSocketOption() {}
 
 // TCPInfoOption is used by GetSockOpt to expose TCP statistics.
 //
@@ -1087,14 +1075,6 @@ type RemoveMembershipOption MembershipOption
 
 func (*RemoveMembershipOption) isSettableSocketOption() {}
 
-// OutOfBandInlineOption is used by SetSockOpt/GetSockOpt to specify whether
-// TCP out-of-band data is delivered along with the normal in-band data.
-type OutOfBandInlineOption int
-
-func (*OutOfBandInlineOption) isGettableSocketOption() {}
-
-func (*OutOfBandInlineOption) isSettableSocketOption() {}
-
 // SocketDetachFilterOption is used by SetSockOpt to detach a previously attached
 // classic BPF filter on a given endpoint.
 type SocketDetachFilterOption int
@@ -1143,10 +1123,6 @@ type LingerOption struct {
 	Enabled bool
 	Timeout time.Duration
 }
-
-func (*LingerOption) isGettableSocketOption() {}
-
-func (*LingerOption) isSettableSocketOption() {}
 
 // IPPacketInfo is the message structure for IP_PKTINFO.
 //
