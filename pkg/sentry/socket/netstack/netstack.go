@@ -623,6 +623,10 @@ func (s *socketOpsCommon) checkFamily(family uint16, exact bool) *syserr.Error {
 		return nil
 	}
 	if !exact && family == linux.AF_INET && s.family == linux.AF_INET6 {
+		if _, skType, skProto := s.Type(); !isTCPSocket(skType, skProto) && !isUDPSocket(skType, skProto) {
+			return syserr.ErrUnknownProtocolOption
+		}
+
 		if !s.Endpoint.SocketOptions().GetV6Only() {
 			return nil
 		}
