@@ -114,6 +114,37 @@ const (
 	IPv6FragmentExtHdrFragmentOffsetBytesPerUnit = 8
 )
 
+// padIPv6OptionsLength returns the total length for IPv6 options of length l
+// considering the 8-octet alignment as stated in RFC 2460 Section 4.2.
+func padIPv6OptionsLength(l int) int {
+	return (l + ipv6ExtHdrLenBytesPerUnit - 1) & ^(ipv6ExtHdrLenBytesPerUnit - 1)
+}
+
+// padIPv6Option fills b with the appropriate padding options depending on its
+// length.
+func padIPv6Option(b []byte) {
+	switch len(b) {
+	case 0: // No padding needed.
+	case 1: // Pad with Pad1.
+		b[0] = uint8(ipv6Pad1ExtHdrOptionIdentifier)
+	default: // Pad with PadN.
+		s := b[2:]
+		for i := range s {
+			s[i] = 0
+		}
+		b[0] = uint8(ipv6PadNExtHdrOptionIdentifier)
+		b[1] = uint8(len(b) - 2)
+	}
+}
+
+// ipv6OptionsAlignmentPadding returns the number of padding bytes needed to
+// serialize an option at headerOffset with alignment requirements
+// [align]n + alignOffset.
+func ipv6OptionsAlignmentPadding(headerOffset int, align int, alignOffset int) int {
+	padLen := headerOffset - alignOffset
+	return ((padLen + align - 1) & ^(align - 1)) - padLen
+}
+
 // IPv6PayloadHeader is implemented by the various headers that can be found
 // in an IPv6 payload.
 //
@@ -206,29 +237,39 @@ type IPv6ExtHdrOption interface {
 	isIPv6ExtHdrOption()
 }
 
-// IPv6ExtHdrOptionIndentifier is an IPv6 extension header option identifier.
-type IPv6ExtHdrOptionIndentifier uint8
+// IPv6ExtHdrOptionIdentifier is an IPv6 extension header option identifier.
+type IPv6ExtHdrOptionIdentifier uint8
 
 const (
 	// ipv6Pad1ExtHdrOptionIdentifier is the identifier for a padding option that
 	// provides 1 byte padding, as outlined in RFC 8200 section 4.2.
-	ipv6Pad1ExtHdrOptionIdentifier IPv6ExtHdrOptionIndentifier = 0
+	ipv6Pad1ExtHdrOptionIdentifier IPv6ExtHdrOptionIdentifier = 0
 
 	// ipv6PadBExtHdrOptionIdentifier is the identifier for a padding option that
 	// provides variable length byte padding, as outlined in RFC 8200 section 4.2.
-	ipv6PadNExtHdrOptionIdentifier IPv6ExtHdrOptionIndentifier = 1
+	ipv6PadNExtHdrOptionIdentifier IPv6ExtHdrOptionIdentifier = 1
+
+	// ipv6RouterAlertHopByHopOptionIdentifier is the identifier for the Router
+	// Alert Hop by Hop option as defined in RFC 2711 section 2.1.
+	ipv6RouterAlertHopByHopOptionIdentifier IPv6ExtHdrOptionIdentifier = 5
 )
+
+// ipv6UnknownActionFromIdentifier maps an extension header option's
+//identifier's high  bits to the action to take when the identifier is unknown.
+func ipv6UnknownActionFromIdentifier(id IPv6ExtHdrOptionIdentifier) IPv6OptionUnknownAction {
+	return IPv6OptionUnknownAction((id & ipv6UnknownExtHdrOptionActionMask) >> ipv6UnknownExtHdrOptionActionShift)
+}
 
 // IPv6UnknownExtHdrOption holds the identifier and data for an IPv6 extension
 // header option that is unknown by the parsing utilities.
 type IPv6UnknownExtHdrOption struct {
-	Identifier IPv6ExtHdrOptionIndentifier
+	Identifier IPv6ExtHdrOptionIdentifier
 	Data       []byte
 }
 
 // UnknownAction implements IPv6OptionUnknownAction.UnknownAction.
 func (o *IPv6UnknownExtHdrOption) UnknownAction() IPv6OptionUnknownAction {
-	return IPv6OptionUnknownAction((o.Identifier & ipv6UnknownExtHdrOptionActionMask) >> ipv6UnknownExtHdrOptionActionShift)
+	return ipv6UnknownActionFromIdentifier(o.Identifier)
 }
 
 // isIPv6ExtHdrOption implements IPv6ExtHdrOption.isIPv6ExtHdrOption.
@@ -251,7 +292,7 @@ func (i *IPv6OptionsExtHdrOptionsIterator) Next() (IPv6ExtHdrOption, bool, error
 			// options buffer has been exhausted and we are done iterating.
 			return nil, true, nil
 		}
-		id := IPv6ExtHdrOptionIndentifier(temp)
+		id := IPv6ExtHdrOptionIdentifier(temp)
 
 		// If the option identifier indicates the option is a Pad1 option, then we
 		// know the option does not have Length and Data fields. End processing of
@@ -294,6 +335,14 @@ func (i *IPv6OptionsExtHdrOptionsIterator) Next() (IPv6ExtHdrOption, bool, error
 				panic(fmt.Sprintf("error when skipping PadN (N = %d) option's data bytes: %s", length, err))
 			}
 			continue
+		case ipv6RouterAlertHopByHopOptionIdentifier:
+			var routerAlertValue [ipv6RouterAlertPayloadLength]byte
+			if n, err := i.reader.Read(routerAlertValue[:]); err != nil {
+				panic(fmt.Sprintf("error when reading RouterAlert option's data bytes: %s", err))
+			} else if n != ipv6RouterAlertPayloadLength {
+				return nil, true, fmt.Errorf("read %d bytes for RouterAlert option, expected %d", n, ipv6RouterAlertPayloadLength)
+			}
+			return &IPv6RouterAlertOption{Value: IPv6RouterAlertValue(binary.BigEndian.Uint16(routerAlertValue[:]))}, false, nil
 		default:
 			bytes := make([]byte, length)
 			if n, err := io.ReadFull(&i.reader, bytes); err != nil {
@@ -547,6 +596,27 @@ func (i *IPv6PayloadIterator) Next() (IPv6PayloadHeader, bool, error) {
 	}
 }
 
+// ReadUntilUnknown consumes the iterator until an unknown IPv6 payload is
+// found and returns it.
+//
+// An error is returned if parsing errors occur or if the iterator finishes
+// before finding an unknown payload.
+func (i *IPv6PayloadIterator) ReadUntilUnknown() (IPv6RawPayloadHeader, error) {
+	for {
+		h, done, err := i.Next()
+		if err != nil {
+			return IPv6RawPayloadHeader{}, err
+		}
+		if done {
+			return IPv6RawPayloadHeader{}, fmt.Errorf("not found")
+		}
+		r, ok := h.(IPv6RawPayloadHeader)
+		if ok {
+			return r, nil
+		}
+	}
+}
+
 // nextHeaderData returns the extension header's Next Header field and raw data.
 //
 // fragmentHdr indicates that the extension header being parsed is the Fragment
@@ -608,4 +678,233 @@ func (i *IPv6PayloadIterator) nextHeaderData(fragmentHdr bool, bytes []byte) (IP
 	}
 
 	return IPv6ExtensionHeaderIdentifier(nextHdrIdentifier), bytes, nil
+}
+
+// IPv6SerializableExtHdr provides serialization for IPv6 extension
+// headers.
+type IPv6SerializableExtHdr interface {
+	// identifier returns the assigned IPv6 header identifier for this extension
+	// header.
+	identifier() IPv6ExtensionHeaderIdentifier
+
+	// length returns the total serialized length in bytes of this extension
+	// header.
+	length() int
+
+	// serializeInto serializes the receiver into the provided byte
+	// buffer and with the provided nextHeader value.
+	//
+	// Note, the caller MUST provide a byte buffer with size of at least
+	// length. Implementers of this function may assume that the byte buffer
+	// is of sufficient size. serializeInto MAY panic if the provided byte
+	// buffer is not of sufficient size.
+	//
+	// serializeInto will return the number of bytes that was used to
+	// serialize the receiver. Implementers must only use the number of
+	// bytes required to serialize the receiver. Callers MAY provide a
+	// larger buffer than required to serialize into.
+	serializeInto(nextHeader uint8, b []byte) int
+}
+
+var _ IPv6SerializableExtHdr = (*IPv6SerializableHopByHopExtHdr)(nil)
+
+// IPv6SerializableHopByHopExtHdr implements serialization of the Hop by Hop
+// options extension header.
+type IPv6SerializableHopByHopExtHdr []IPv6SerializableHopByHopOption
+
+const (
+	// ipv6HopByHopExtHdrNextHeaderOffset is the offset of the next header field
+	// in a hop by hop extension header.
+	ipv6HopByHopExtHdrNextHeaderOffset = 0
+
+	// ipv6HopByHopExtHdrLengthOffset is the offset of the length field in a hop
+	// by hop extension header.
+	ipv6HopByHopExtHdrLengthOffset = 1
+
+	// ipv6HopByHopExtHdrPayloadOffset is the offset of the options in a hop by
+	// hop extension header.
+	ipv6HopByHopExtHdrOptionsOffset = 2
+)
+
+// identifier implements IPv6SerializableExtHdr.
+func (IPv6SerializableHopByHopExtHdr) identifier() IPv6ExtensionHeaderIdentifier {
+	return IPv6HopByHopOptionsExtHdrIdentifier
+}
+
+// length implements IPv6SerializableExtHdr.
+func (h IPv6SerializableHopByHopExtHdr) length() int {
+	var total int
+	for _, opt := range h {
+		align, alignOffset := opt.alignment()
+		total += ipv6OptionsAlignmentPadding(total, align, alignOffset)
+		total += 2 + int(opt.length())
+	}
+	// Account for next header and total length fields and add padding.
+	return padIPv6OptionsLength(2 + total)
+}
+
+// serializeInto implements IPv6SerializableExtHdr.
+func (h IPv6SerializableHopByHopExtHdr) serializeInto(nextHeader uint8, b []byte) int {
+	optBuffer := b[ipv6HopByHopExtHdrOptionsOffset:]
+	totalLength := ipv6HopByHopExtHdrOptionsOffset
+	for _, opt := range h {
+		// Calculate alignment requirements and pad buffer if necessary.
+		align, alignOffset := opt.alignment()
+		padLen := ipv6OptionsAlignmentPadding(totalLength, align, alignOffset)
+		if padLen != 0 {
+			padIPv6Option(optBuffer[:padLen])
+			totalLength += padLen
+			optBuffer = optBuffer[padLen:]
+		}
+
+		l := opt.serializeInto(optBuffer[2:])
+		optBuffer[0] = uint8(opt.identifier())
+		optBuffer[1] = l
+		l += 2
+		totalLength += int(l)
+		optBuffer = optBuffer[l:]
+	}
+	padded := padIPv6OptionsLength(totalLength)
+	if padded != totalLength {
+		padIPv6Option(optBuffer[:padded-totalLength])
+		totalLength = padded
+	}
+	// Length field is expressed in units of 8 octets, discounting the first 8
+	// octets.
+	wordsLen := totalLength/ipv6ExtHdrLenBytesPerUnit - 1
+	if wordsLen > 255 {
+		panic(fmt.Sprintf("IPv6 hop by hop options too large: %d+1 64-bit words", wordsLen))
+	}
+	b[ipv6HopByHopExtHdrNextHeaderOffset] = nextHeader
+	b[ipv6HopByHopExtHdrLengthOffset] = uint8(wordsLen)
+	return totalLength
+}
+
+// IPv6SerializableHopByHopOption provides serialization for hop by hop options.
+type IPv6SerializableHopByHopOption interface {
+	// identifier returns the option identifier of this Hop by Hop option.
+	identifier() IPv6ExtHdrOptionIdentifier
+
+	// length returns the *payload* size of the option (not considering the type
+	// and length fields).
+	length() uint8
+
+	// alignment returns the alignment requirements from this option.
+	//
+	// Alignment requirements take the form [align]n + offset as specified in
+	// RFC 2460 section 4.2. The alignment requirement is on the offset between
+	// the option type byte and the start of the hop by hop header.
+	//
+	// align must be a power of 2.
+	alignment() (align int, offset int)
+
+	// serializeInto serializes the receiver into the provided byte
+	// buffer.
+	//
+	// Note, the caller MUST provide a byte buffer with size of at least
+	// length. Implementers of this function may assume that the byte buffer
+	// is of sufficient size. serializeInto MAY panic if the provided byte
+	// buffer is not of sufficient size.
+	//
+	// serializeInto will return the number of bytes that was used to
+	// serialize the receiver. Implementers must only use the number of
+	// bytes required to serialize the receiver. Callers MAY provide a
+	// larger buffer than required to serialize into.
+	serializeInto(b []byte) uint8
+}
+
+var _ IPv6SerializableHopByHopOption = (*IPv6RouterAlertOption)(nil)
+
+// IPv6RouterAlertOption is the IPv6 Router alert Hop by Hop option defined in
+// RFC 2711 section 2.1.
+type IPv6RouterAlertOption struct {
+	Value IPv6RouterAlertValue
+}
+
+// IPv6RouterAlertValue is the payload of an IPv6 Router Alert option.
+type IPv6RouterAlertValue uint16
+
+const (
+	// IPv6RouterAlertMLD indicates a datagram containing a Multicast Listener
+	// Discovery message.
+	IPv6RouterAlertMLD IPv6RouterAlertValue = 0
+	// IPv6RouterAlertRSVP indicates a datagram containing an RSVP message.
+	IPv6RouterAlertRSVP IPv6RouterAlertValue = 1
+	// IPv6RouterAlertActiveNetworks indicates a datagram containing an Active
+	// Networks message.
+	IPv6RouterAlertActiveNetworks IPv6RouterAlertValue = 2
+
+	// ipv6RouterAlertPayloadLength is the length of the Router Alert payload
+	// as defined in RFC 2711.
+	ipv6RouterAlertPayloadLength = 2
+)
+
+// UnknownAction implements IPv6ExtHdrOption.
+func (*IPv6RouterAlertOption) UnknownAction() IPv6OptionUnknownAction {
+	return ipv6UnknownActionFromIdentifier(ipv6RouterAlertHopByHopOptionIdentifier)
+}
+
+// isIPv6ExtHdrOption implements IPv6ExtHdrOption.
+func (*IPv6RouterAlertOption) isIPv6ExtHdrOption() {}
+
+// identifier implements IPv6SerializableHopByHopOption.
+func (*IPv6RouterAlertOption) identifier() IPv6ExtHdrOptionIdentifier {
+	return ipv6RouterAlertHopByHopOptionIdentifier
+}
+
+// length implements IPv6SerializableHopByHopOption.
+func (*IPv6RouterAlertOption) length() uint8 {
+	return ipv6RouterAlertPayloadLength
+}
+
+// alignment implements IPv6SerializableHopByHopOption.
+func (*IPv6RouterAlertOption) alignment() (int, int) {
+	// From RFC 2771 section 2.1:
+	//   Alignment requirement: 2n+0.
+	return 2, 0
+}
+
+// serializeInto implements IPv6SerializableHopByHopOption.
+func (o *IPv6RouterAlertOption) serializeInto(b []byte) uint8 {
+	binary.BigEndian.PutUint16(b, uint16(o.Value))
+	return ipv6RouterAlertPayloadLength
+}
+
+// IPv6ExtHdrSerializer provides serialization of IPv6 extension headers.
+type IPv6ExtHdrSerializer []IPv6SerializableExtHdr
+
+// Serialize serializes the provided list of IPv6 extension headers into b.
+//
+// Note, b must be of sufficient size to hold all the headers in s. See
+// IPv6ExtHdrSerializer.Length for details on the getting the total size of a
+// serialized IPv6ExtHdrSerializer.
+//
+// Serialize may panic if b is not of sufficient size to hold all the options
+// in s.
+//
+// Serialize takes the nextHeader value to be used in the last extension header
+// and returns the header identifier of the first serialized extension header
+// and the total serialized length.
+func (s IPv6ExtHdrSerializer) Serialize(nextHeader uint8, b []byte) (uint8, int) {
+	if len(s) == 0 {
+		return nextHeader, 0
+	}
+	var totalLength int
+	for i, h := range s[:len(s)-1] {
+		l := h.serializeInto(uint8(s[i+1].identifier()), b)
+		b = b[l:]
+		totalLength += l
+	}
+	totalLength += s[len(s)-1].serializeInto(nextHeader, b)
+	return uint8(s[0].identifier()), totalLength
+}
+
+// Length returns the total number of bytes required to serialize the extension
+// headers.
+func (s IPv6ExtHdrSerializer) Length() int {
+	var totalLength int
+	for _, h := range s {
+		totalLength += h.length()
+	}
+	return totalLength
 }

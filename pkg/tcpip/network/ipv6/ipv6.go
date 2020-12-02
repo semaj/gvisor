@@ -392,12 +392,14 @@ func (e *endpoint) MaxHeaderLength() uint16 {
 	return e.nic.MaxHeaderLength() + header.IPv6MinimumSize
 }
 
-func (e *endpoint) addIPHeader(srcAddr, dstAddr tcpip.Address, pkt *stack.PacketBuffer, params stack.NetworkHeaderParams) {
-	length := uint16(pkt.Size())
-	ip := header.IPv6(pkt.NetworkHeader().Push(header.IPv6MinimumSize))
+func (e *endpoint) addIPHeader(srcAddr, dstAddr tcpip.Address, pkt *stack.PacketBuffer, params stack.NetworkHeaderParams, extensionHeaders header.IPv6ExtHdrSerializer) {
+	length := pkt.Size()
+	ip := header.IPv6(pkt.NetworkHeader().Push(header.IPv6MinimumSize + extensionHeaders.Length()))
+	nextHeader, extHdrLen := extensionHeaders.Serialize(uint8(params.Protocol), ip[header.IPv6MinimumSize:])
+	length += extHdrLen
 	ip.Encode(&header.IPv6Fields{
-		PayloadLength: length,
-		NextHeader:    uint8(params.Protocol),
+		PayloadLength: uint16(length),
+		NextHeader:    nextHeader,
 		HopLimit:      params.TTL,
 		TrafficClass:  params.TOS,
 		SrcAddr:       srcAddr,
@@ -456,7 +458,7 @@ func (e *endpoint) handleFragments(r *stack.Route, gso *stack.GSO, networkMTU ui
 
 // WritePacket writes a packet to the given destination address and protocol.
 func (e *endpoint) WritePacket(r *stack.Route, gso *stack.GSO, params stack.NetworkHeaderParams, pkt *stack.PacketBuffer) *tcpip.Error {
-	e.addIPHeader(r.LocalAddress, r.RemoteAddress, pkt, params)
+	e.addIPHeader(r.LocalAddress, r.RemoteAddress, pkt, params, nil /* extensionHeaders */)
 
 	// iptables filtering. All packets that reach here are locally
 	// generated.
@@ -545,7 +547,7 @@ func (e *endpoint) WritePackets(r *stack.Route, gso *stack.GSO, pkts stack.Packe
 
 	linkMTU := e.nic.MTU()
 	for pb := pkts.Front(); pb != nil; pb = pb.Next() {
-		e.addIPHeader(r.LocalAddress, r.RemoteAddress, pb, params)
+		e.addIPHeader(r.LocalAddress, r.RemoteAddress, pb, params, nil /* extensionHeaders */)
 
 		networkMTU, err := calculateNetworkMTU(linkMTU, uint32(pb.NetworkHeader().View().Size()))
 		if err != nil {
@@ -1746,6 +1748,7 @@ func buildNextFragment(pf *fragmentation.PacketFragmenter, originalIPHeaders hea
 	fragmentIPHeaders.SetNextHeader(header.IPv6FragmentHeader)
 	fragmentIPHeaders.SetPayloadLength(uint16(copied + fragmentIPHeadersLength - header.IPv6MinimumSize))
 
+	// TODO(gvisor.dev/issues/4996): Use header.IPv6ExtHdrSerializer instead.
 	fragmentHeader := header.IPv6Fragment(fragmentIPHeaders[originalIPHeadersLength:])
 	fragmentHeader.Encode(&header.IPv6FragmentFields{
 		M:              more,

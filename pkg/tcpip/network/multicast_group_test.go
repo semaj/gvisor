@@ -69,13 +69,16 @@ func validateMLDPacket(t *testing.T, p channel.PacketInfo, remoteAddress tcpip.A
 	t.Helper()
 
 	payload := header.IPv6(stack.PayloadSince(p.Pkt.NetworkHeader()))
-	checker.IPv6(t, payload,
-		checker.DstAddr(remoteAddress),
-		// Hop Limit for an MLD message must be 1 as per RFC 2710 section 3.
-		checker.TTL(1),
-		checker.MLD(header.ICMPv6Type(mldType), header.MLDMinimumSize,
-			checker.MLDMaxRespDelay(time.Duration(maxRespTime)*time.Millisecond),
-			checker.MLDMulticastAddress(groupAddress),
+	checker.IPv6ExtHdr(t, payload,
+		checker.IPv6HopByHopExtensionHeader(checker.IPv6RouterAlert(header.IPv6RouterAlertMLD)),
+		checker.IPv6TransportPayload(
+			checker.DstAddr(remoteAddress),
+			// Hop Limit for an MLD message must be 1 as per RFC 2710 section 3.
+			checker.TTL(1),
+			checker.MLD(header.ICMPv6Type(mldType), header.MLDMinimumSize,
+				checker.MLDMaxRespDelay(time.Duration(maxRespTime)*time.Millisecond),
+				checker.MLDMulticastAddress(groupAddress),
+			),
 		),
 	)
 }
@@ -90,6 +93,7 @@ func validateIGMPPacket(t *testing.T, p channel.PacketInfo, remoteAddress tcpip.
 		checker.DstAddr(remoteAddress),
 		// TTL for an IGMP message must be 1 as per RFC 2236 section 2.
 		checker.TTL(1),
+		checker.IPv4RouterAlert(),
 		checker.IGMP(
 			checker.IGMPType(header.IGMPType(igmpType)),
 			checker.IGMPMaxRespTime(header.DecisecondToDuration(maxRespTime)),
@@ -896,10 +900,20 @@ func TestMGPWithNICLifecycle(t *testing.T) {
 				t.Helper()
 
 				ipv6 := header.IPv6(stack.PayloadSince(p.Pkt.NetworkHeader()))
-				if got := tcpip.TransportProtocolNumber(ipv6.NextHeader()); got != header.ICMPv6ProtocolNumber {
+
+				ipv6HeaderIter := header.MakeIPv6PayloadIterator(
+					header.IPv6ExtensionHeaderIdentifier(ipv6.NextHeader()),
+					buffer.View(ipv6.Payload()).ToVectorisedView(),
+				)
+				transport, err := ipv6HeaderIter.ReadUntilUnknown()
+				if err != nil {
+					t.Fatalf("got ipv6HeaderIter.ReadUntilUnknown() = %s", err)
+				}
+
+				if got := tcpip.TransportProtocolNumber(transport.Identifier); got != header.ICMPv6ProtocolNumber {
 					t.Fatalf("got ipv6.NextHeader() = %d, want = %d", got, header.ICMPv6ProtocolNumber)
 				}
-				icmpv6 := header.ICMPv6(ipv6.Payload())
+				icmpv6 := header.ICMPv6(transport.Buf.ToView())
 				if got := icmpv6.Type(); got != header.ICMPv6MulticastListenerReport && got != header.ICMPv6MulticastListenerDone {
 					t.Fatalf("got icmpv6.Type() = %d, want = %d or %d", got, header.ICMPv6MulticastListenerReport, header.ICMPv6MulticastListenerDone)
 				}

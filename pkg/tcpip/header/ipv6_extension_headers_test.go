@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 )
 
@@ -59,7 +60,7 @@ func (a IPv6DestinationOptionsExtHdr) Equal(b IPv6DestinationOptionsExtHdr) bool
 func TestIPv6UnknownExtHdrOption(t *testing.T) {
 	tests := []struct {
 		name                  string
-		identifier            IPv6ExtHdrOptionIndentifier
+		identifier            IPv6ExtHdrOptionIdentifier
 		expectedUnknownAction IPv6OptionUnknownAction
 	}{
 		{
@@ -986,6 +987,328 @@ func TestIPv6ExtHdrIter(t *testing.T) {
 			}
 			if extHdr != nil {
 				t.Errorf("(last) got Next() = %T, want = nil", extHdr)
+			}
+		})
+	}
+}
+
+var _ IPv6SerializableHopByHopOption = (*DummyHbHOptionSerializer)(nil)
+
+// DummyHbHOptionSerializer provides a generic implementation of
+// IPv6SerializableHopByHopOption for use in tests.
+type DummyHbHOptionSerializer struct {
+	id          IPv6ExtHdrOptionIdentifier
+	payload     []byte
+	align       int
+	alignOffset int
+}
+
+// identifier implements IPv6SerializableHopByHopOption.
+func (s *DummyHbHOptionSerializer) identifier() IPv6ExtHdrOptionIdentifier {
+	return s.id
+}
+
+// length implements IPv6SerializableHopByHopOption.
+func (s *DummyHbHOptionSerializer) length() uint8 {
+	return uint8(len(s.payload))
+}
+
+// alignment implements IPv6SerializableHopByHopOption.
+func (s *DummyHbHOptionSerializer) alignment() (int, int) {
+	align := 1
+	if s.align != 0 {
+		align = s.align
+	}
+	return align, s.alignOffset
+}
+
+// serializeInto implements IPv6SerializableHopByHopOption.
+func (s *DummyHbHOptionSerializer) serializeInto(b []byte) uint8 {
+	return uint8(copy(b, s.payload))
+}
+
+func TestIPv6HopByHopSerializer(t *testing.T) {
+	validateDummies := func(t *testing.T, serializable IPv6SerializableHopByHopOption, deserialized IPv6ExtHdrOption) {
+		t.Helper()
+		dummy, ok := serializable.(*DummyHbHOptionSerializer)
+		if !ok {
+			t.Fatalf("got serializable = %T, want = *DummyHbHOptionSerializer", serializable)
+		}
+		unknown, ok := deserialized.(*IPv6UnknownExtHdrOption)
+		if !ok {
+			t.Fatalf("got deserialized = %T, want = %T", deserialized, &IPv6UnknownExtHdrOption{})
+		}
+		if dummy.id != unknown.Identifier {
+			t.Errorf("got deserialized identifier = %d, want = %d", unknown.Identifier, dummy.id)
+		}
+		if diff := cmp.Diff(dummy.payload, unknown.Data); diff != "" {
+			t.Errorf("deserialization mismatch (-want +got):\n%s", diff)
+		}
+	}
+	tests := []struct {
+		name       string
+		nextHeader uint8
+		options    []IPv6SerializableHopByHopOption
+		expect     []byte
+		validate   func(*testing.T, IPv6SerializableHopByHopOption, IPv6ExtHdrOption)
+	}{
+		{
+			name:       "single option",
+			nextHeader: 13,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      15,
+					payload: []byte{9, 8, 7, 6},
+				},
+			},
+			expect:   []byte{13, 0, 15, 4, 9, 8, 7, 6},
+			validate: validateDummies,
+		},
+		{
+			name:       "short option padN zero",
+			nextHeader: 88,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      22,
+					payload: []byte{4, 5},
+				},
+			},
+			expect:   []byte{88, 0, 22, 2, 4, 5, 1, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "short option pad1",
+			nextHeader: 11,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      33,
+					payload: []byte{1, 2, 3},
+				},
+			},
+			expect:   []byte{11, 0, 33, 3, 1, 2, 3, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "long option padN",
+			nextHeader: 55,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      77,
+					payload: []byte{1, 2, 3, 4, 5, 6, 7, 8},
+				},
+			},
+			expect:   []byte{55, 1, 77, 8, 1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 0, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "two options",
+			nextHeader: 33,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      11,
+					payload: []byte{1, 2, 3},
+				},
+				&DummyHbHOptionSerializer{
+					id:      22,
+					payload: []byte{4, 5, 6},
+				},
+			},
+			expect:   []byte{33, 1, 11, 3, 1, 2, 3, 22, 3, 4, 5, 6, 1, 2, 0, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "two options align 2n",
+			nextHeader: 33,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      11,
+					payload: []byte{1, 2, 3},
+				},
+				&DummyHbHOptionSerializer{
+					id:      22,
+					payload: []byte{4, 5, 6},
+					align:   2,
+				},
+			},
+			expect:   []byte{33, 1, 11, 3, 1, 2, 3, 0, 22, 3, 4, 5, 6, 1, 1, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "two options align 8n+1",
+			nextHeader: 33,
+			options: []IPv6SerializableHopByHopOption{
+				&DummyHbHOptionSerializer{
+					id:      11,
+					payload: []byte{1, 2},
+				},
+				&DummyHbHOptionSerializer{
+					id:          22,
+					payload:     []byte{4, 5, 6},
+					align:       8,
+					alignOffset: 1,
+				},
+			},
+			expect:   []byte{33, 1, 11, 2, 1, 2, 1, 1, 0, 22, 3, 4, 5, 6, 1, 0},
+			validate: validateDummies,
+		},
+		{
+			name:       "no options",
+			nextHeader: 33,
+			options:    []IPv6SerializableHopByHopOption{},
+			expect:     []byte{33, 0, 1, 4, 0, 0, 0, 0},
+		},
+		{
+			name:       "Router Alert",
+			nextHeader: 33,
+			options:    []IPv6SerializableHopByHopOption{&IPv6RouterAlertOption{Value: IPv6RouterAlertMLD}},
+			expect:     []byte{33, 0, 5, 2, 0, 0, 1, 0},
+			validate: func(t *testing.T, _ IPv6SerializableHopByHopOption, deserialized IPv6ExtHdrOption) {
+				t.Helper()
+				routerAlert, ok := deserialized.(*IPv6RouterAlertOption)
+				if !ok {
+					t.Fatalf("got deserialized = %T, want = *IPv6RouterAlertOption", deserialized)
+				}
+				if routerAlert.Value != IPv6RouterAlertMLD {
+					t.Errorf("got routerAlert.Value = %d, want = %d", routerAlert.Value, IPv6RouterAlertMLD)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := IPv6SerializableHopByHopExtHdr(test.options)
+			l := s.length()
+			if got, want := l, len(test.expect); got != want {
+				t.Fatalf("got s.length() = %d, want = %d", got, want)
+			}
+			b := make([]byte, l)
+			for i := range b {
+				// Fill the buffer with ones to ensure all padding is correctly set.
+				b[i] = 0xFF
+			}
+			if got := s.serializeInto(test.nextHeader, b); got != l {
+				t.Fatalf("got s.serializeInto(..) = %d, want = %d", got, l)
+			}
+			if diff := cmp.Diff(test.expect, b); diff != "" {
+				t.Fatalf("serialization mismatch (-want +got):\n%s", diff)
+			}
+
+			// Deserialize the options and verify them.
+			optLen := (b[ipv6HopByHopExtHdrLengthOffset] + 1) * ipv6ExtHdrLenBytesPerUnit
+			iter := ipv6OptionsExtHdr(b[ipv6HopByHopExtHdrOptionsOffset:optLen]).Iter()
+			for _, testOpt := range test.options {
+				opt, done, err := iter.Next()
+				if err != nil || done {
+					t.Fatalf("got iter.Next() = (%T, %t, %s), want = (_, false, nil)", opt, done, err)
+				}
+				test.validate(t, testOpt, opt)
+			}
+			opt, done, err := iter.Next()
+			if err != nil || !done {
+				t.Fatalf("got iter.Next() = (%T, %t, %s), want = (_, true, nil)", opt, done, err)
+			}
+		})
+	}
+}
+
+var _ IPv6SerializableExtHdr = (*DummyIPv6ExtHdrSerializer)(nil)
+
+// DummyIPv6ExtHdrSerializer provides a generic implementation of
+// IPv6SerializableExtHdr for use in tests.
+//
+// The dummy header always carries the nextHeader value in the first byte.
+type DummyIPv6ExtHdrSerializer struct {
+	id             IPv6ExtensionHeaderIdentifier
+	headerContents []byte
+}
+
+// identifier implements IPv6SerializableExtHdr.
+func (s *DummyIPv6ExtHdrSerializer) identifier() IPv6ExtensionHeaderIdentifier {
+	return s.id
+}
+
+// length implements IPv6SerializableExtHdr.
+func (s *DummyIPv6ExtHdrSerializer) length() int {
+	return len(s.headerContents) + 1
+}
+
+// serializeInto implements IPv6SerializableExtHdr.
+func (s *DummyIPv6ExtHdrSerializer) serializeInto(nextHeader uint8, b []byte) int {
+	b[0] = nextHeader
+	return copy(b[1:], s.headerContents) + 1
+}
+
+func TestIPv6ExtHdrSerializer(t *testing.T) {
+	tests := []struct {
+		name             string
+		headers          []IPv6SerializableExtHdr
+		nextHeader       tcpip.TransportProtocolNumber
+		expectSerialized []byte
+		expectNextHeader uint8
+	}{
+		{
+			name: "one header",
+			headers: []IPv6SerializableExtHdr{
+				&DummyIPv6ExtHdrSerializer{
+					id:             15,
+					headerContents: []byte{1, 2, 3, 4},
+				},
+			},
+			nextHeader:       TCPProtocolNumber,
+			expectSerialized: []byte{byte(TCPProtocolNumber), 1, 2, 3, 4},
+			expectNextHeader: 15,
+		},
+		{
+			name: "two headers",
+			headers: []IPv6SerializableExtHdr{
+				&DummyIPv6ExtHdrSerializer{
+					id:             22,
+					headerContents: []byte{1, 2, 3},
+				},
+				&DummyIPv6ExtHdrSerializer{
+					id:             23,
+					headerContents: []byte{4, 5, 6},
+				},
+			},
+			nextHeader: ICMPv6ProtocolNumber,
+			expectSerialized: []byte{
+				23, 1, 2, 3,
+				byte(ICMPv6ProtocolNumber), 4, 5, 6,
+			},
+			expectNextHeader: 22,
+		},
+		{
+			name:             "no headers",
+			headers:          []IPv6SerializableExtHdr{},
+			nextHeader:       UDPProtocolNumber,
+			expectSerialized: []byte{},
+			expectNextHeader: byte(UDPProtocolNumber),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := IPv6ExtHdrSerializer(test.headers)
+			l := s.Length()
+			if got, want := l, len(test.expectSerialized); got != want {
+				t.Fatalf("got serialized length = %d, want = %d", got, want)
+			}
+			b := make([]byte, l)
+			for i := range b {
+				// Fill the buffer with garbage to make sure we're writing to all bytes.
+				b[i] = 0xFF
+			}
+			nextHeader, serializedLen := s.Serialize(uint8(test.nextHeader), b)
+			if serializedLen != len(test.expectSerialized) || nextHeader != test.expectNextHeader {
+				t.Errorf(
+					"got s.Serialize(..) = (%d, %d), want = (%d, %d)",
+					nextHeader,
+					serializedLen,
+					test.expectNextHeader,
+					len(test.expectSerialized),
+				)
+			}
+			if diff := cmp.Diff(test.expectSerialized, b); diff != "" {
+				t.Errorf("serialization mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
