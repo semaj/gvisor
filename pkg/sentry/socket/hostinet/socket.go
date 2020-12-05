@@ -523,7 +523,7 @@ func (s *socketOpsCommon) RecvMsg(t *kernel.Task, dst usermem.IOSequence, flags 
 				controlMessages.IP.HasIPPacketInfo = true
 				var packetInfo linux.ControlMessageIPPacketInfo
 				binary.Unmarshal(unixCmsg.Data[:linux.SizeOfControlMessageIPPacketInfo], usermem.ByteOrder, &packetInfo)
-				controlMessages.IP.PacketInfo = control.NewIPPacketInfo(packetInfo)
+				controlMessages.IP.PacketInfo = packetInfo
 			}
 
 		case syscall.SOL_IPV6:
