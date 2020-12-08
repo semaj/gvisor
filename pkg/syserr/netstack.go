@@ -15,7 +15,10 @@
 package syserr
 
 import (
+	"fmt"
+
 	"gvisor.dev/gvisor/pkg/abi/linux"
+	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 )
 
@@ -48,54 +51,75 @@ var (
 	ErrNotPermittedNet       = New(tcpip.ErrNotPermitted.String(), linux.EPERM)
 )
 
-var netstackErrorTranslations = map[*tcpip.Error]*Error{
-	tcpip.ErrUnknownProtocol:           ErrUnknownProtocol,
-	tcpip.ErrUnknownNICID:              ErrUnknownNICID,
-	tcpip.ErrUnknownDevice:             ErrUnknownDevice,
-	tcpip.ErrUnknownProtocolOption:     ErrUnknownProtocolOption,
-	tcpip.ErrDuplicateNICID:            ErrDuplicateNICID,
-	tcpip.ErrDuplicateAddress:          ErrDuplicateAddress,
-	tcpip.ErrNoRoute:                   ErrNoRoute,
-	tcpip.ErrBadLinkEndpoint:           ErrBadLinkEndpoint,
-	tcpip.ErrAlreadyBound:              ErrAlreadyBound,
-	tcpip.ErrInvalidEndpointState:      ErrInvalidEndpointState,
-	tcpip.ErrAlreadyConnecting:         ErrAlreadyConnecting,
-	tcpip.ErrAlreadyConnected:          ErrAlreadyConnected,
-	tcpip.ErrNoPortAvailable:           ErrNoPortAvailable,
-	tcpip.ErrPortInUse:                 ErrPortInUse,
-	tcpip.ErrBadLocalAddress:           ErrBadLocalAddress,
-	tcpip.ErrClosedForSend:             ErrClosedForSend,
-	tcpip.ErrClosedForReceive:          ErrClosedForReceive,
-	tcpip.ErrWouldBlock:                ErrWouldBlock,
-	tcpip.ErrConnectionRefused:         ErrConnectionRefused,
-	tcpip.ErrTimeout:                   ErrTimeout,
-	tcpip.ErrAborted:                   ErrAborted,
-	tcpip.ErrConnectStarted:            ErrConnectStarted,
-	tcpip.ErrDestinationRequired:       ErrDestinationRequired,
-	tcpip.ErrNotSupported:              ErrNotSupported,
-	tcpip.ErrQueueSizeNotSupported:     ErrQueueSizeNotSupported,
-	tcpip.ErrNotConnected:              ErrNotConnected,
-	tcpip.ErrConnectionReset:           ErrConnectionReset,
-	tcpip.ErrConnectionAborted:         ErrConnectionAborted,
-	tcpip.ErrNoSuchFile:                ErrNoSuchFile,
-	tcpip.ErrInvalidOptionValue:        ErrInvalidOptionValue,
-	tcpip.ErrNoLinkAddress:             ErrHostDown,
-	tcpip.ErrBadAddress:                ErrBadAddress,
-	tcpip.ErrNetworkUnreachable:        ErrNetworkUnreachable,
-	tcpip.ErrMessageTooLong:            ErrMessageTooLong,
-	tcpip.ErrNoBufferSpace:             ErrNoBufferSpace,
-	tcpip.ErrBroadcastDisabled:         ErrBroadcastDisabled,
-	tcpip.ErrNotPermitted:              ErrNotPermittedNet,
-	tcpip.ErrAddressFamilyNotSupported: ErrAddressFamilyNotSupported,
+var initOnce sync.Once
+var errTranslationMu sync.RWMutex
+var netstackErrorTranslations map[string]*Error
+
+// Precondition: calls to this function are synchronized.
+func addErrMapping(key string, val *Error) {
+	if _, ok := netstackErrorTranslations[key]; ok {
+		panic(fmt.Sprintf("duplicate error key: %s", key))
+	}
+	netstackErrorTranslations[key] = val
+}
+
+// Precondition: calls to this function are synchronized.
+func initErrorTranslations() {
+	netstackErrorTranslations = make(map[string]*Error)
+	addErrMapping(tcpip.ErrUnknownProtocol.String(), ErrUnknownProtocol)
+	addErrMapping(tcpip.ErrUnknownNICID.String(), ErrUnknownNICID)
+	addErrMapping(tcpip.ErrUnknownDevice.String(), ErrUnknownDevice)
+	addErrMapping(tcpip.ErrUnknownProtocolOption.String(), ErrUnknownProtocolOption)
+	addErrMapping(tcpip.ErrDuplicateNICID.String(), ErrDuplicateNICID)
+	addErrMapping(tcpip.ErrDuplicateAddress.String(), ErrDuplicateAddress)
+	addErrMapping(tcpip.ErrNoRoute.String(), ErrNoRoute)
+	addErrMapping(tcpip.ErrBadLinkEndpoint.String(), ErrBadLinkEndpoint)
+	addErrMapping(tcpip.ErrAlreadyBound.String(), ErrAlreadyBound)
+	addErrMapping(tcpip.ErrInvalidEndpointState.String(), ErrInvalidEndpointState)
+	addErrMapping(tcpip.ErrAlreadyConnecting.String(), ErrAlreadyConnecting)
+	addErrMapping(tcpip.ErrAlreadyConnected.String(), ErrAlreadyConnected)
+	addErrMapping(tcpip.ErrNoPortAvailable.String(), ErrNoPortAvailable)
+	addErrMapping(tcpip.ErrPortInUse.String(), ErrPortInUse)
+	addErrMapping(tcpip.ErrBadLocalAddress.String(), ErrBadLocalAddress)
+	addErrMapping(tcpip.ErrClosedForSend.String(), ErrClosedForSend)
+	addErrMapping(tcpip.ErrClosedForReceive.String(), ErrClosedForReceive)
+	addErrMapping(tcpip.ErrWouldBlock.String(), ErrWouldBlock)
+	addErrMapping(tcpip.ErrConnectionRefused.String(), ErrConnectionRefused)
+	addErrMapping(tcpip.ErrTimeout.String(), ErrTimeout)
+	addErrMapping(tcpip.ErrAborted.String(), ErrAborted)
+	addErrMapping(tcpip.ErrConnectStarted.String(), ErrConnectStarted)
+	addErrMapping(tcpip.ErrDestinationRequired.String(), ErrDestinationRequired)
+	addErrMapping(tcpip.ErrNotSupported.String(), ErrNotSupported)
+	addErrMapping(tcpip.ErrQueueSizeNotSupported.String(), ErrQueueSizeNotSupported)
+	addErrMapping(tcpip.ErrNotConnected.String(), ErrNotConnected)
+	addErrMapping(tcpip.ErrConnectionReset.String(), ErrConnectionReset)
+	addErrMapping(tcpip.ErrConnectionAborted.String(), ErrConnectionAborted)
+	addErrMapping(tcpip.ErrNoSuchFile.String(), ErrNoSuchFile)
+	addErrMapping(tcpip.ErrInvalidOptionValue.String(), ErrInvalidOptionValue)
+	addErrMapping(tcpip.ErrNoLinkAddress.String(), ErrHostDown)
+	addErrMapping(tcpip.ErrBadAddress.String(), ErrBadAddress)
+	addErrMapping(tcpip.ErrNetworkUnreachable.String(), ErrNetworkUnreachable)
+	addErrMapping(tcpip.ErrMessageTooLong.String(), ErrMessageTooLong)
+	addErrMapping(tcpip.ErrNoBufferSpace.String(), ErrNoBufferSpace)
+	addErrMapping(tcpip.ErrBroadcastDisabled.String(), ErrBroadcastDisabled)
+	addErrMapping(tcpip.ErrNotPermitted.String(), ErrNotPermittedNet)
+	addErrMapping(tcpip.ErrAddressFamilyNotSupported.String(), ErrAddressFamilyNotSupported)
 }
 
 // TranslateNetstackError converts an error from the tcpip package to a sentry
 // internal error.
 func TranslateNetstackError(err *tcpip.Error) *Error {
+	if netstackErrorTranslations == nil {
+		errTranslationMu.Lock()
+		initOnce.Do(initErrorTranslations)
+		errTranslationMu.Unlock()
+	}
 	if err == nil {
 		return nil
 	}
-	se, ok := netstackErrorTranslations[err]
+	errTranslationMu.RLock()
+	se, ok := netstackErrorTranslations[err.String()]
+	errTranslationMu.RUnlock()
 	if !ok {
 		panic("Unknown error: " + err.String())
 	}

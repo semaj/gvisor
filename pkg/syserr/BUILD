@@ -12,6 +12,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/abi/linux",
+        "//pkg/sync",
         "//pkg/syserror",
         "//pkg/tcpip",
     ],
